@@ -12,6 +12,7 @@ contract PolicyGuard {
 
     error NotOwner();
     error NoActivePolicy();
+    error UserBlacklisted();
     error InvalidDailyLimit();
     error InvalidExposureLimit();
     error InvalidRiskScore();
@@ -28,6 +29,7 @@ contract PolicyGuard {
     mapping(address => mapping(address => uint256)) public protocolExposure;
     mapping(address => bool) public whitelistedProtocols;
     mapping(address => uint256) public protocolRiskScores;
+    mapping(address => bool) public blacklistedUsers;
 
     // ============ Structs ============
 
@@ -50,6 +52,8 @@ contract PolicyGuard {
     event ProtocolWhitelisted(address indexed protocol, uint256 riskScore);
     event ProtocolRemoved(address indexed protocol);
     event EmergencyPause(address indexed user, string reason);
+    event UserBlacklistedEvent(address indexed user, string reason);
+    event UserUnblacklisted(address indexed user);
 
     // ============ Modifiers ============
 
@@ -59,7 +63,13 @@ contract PolicyGuard {
     }
 
     modifier hasActivePolicy(address user) {
+        if (blacklistedUsers[user]) revert UserBlacklisted();
         if (!userPolicies[user].active) revert NoActivePolicy();
+        _;
+    }
+
+    modifier notBlacklisted() {
+        if (blacklistedUsers[msg.sender]) revert UserBlacklisted();
         _;
     }
 
@@ -83,7 +93,7 @@ contract PolicyGuard {
         uint256 maxProtocolExposure,
         uint256 maxRiskScore,
         bool requireWhitelist
-    ) external {
+    ) external notBlacklisted {
         if (dailyLimit == 0) revert InvalidDailyLimit();
         if (maxProtocolExposure > 10000) revert InvalidExposureLimit();
         if (maxRiskScore < 1 || maxRiskScore > 10) revert InvalidRiskScore();
@@ -186,13 +196,33 @@ contract PolicyGuard {
     }
 
     /**
-     * @notice Emergency pause for a user
+     * @notice Emergency pause for a user (deactivates policy)
      * @param user User address
      * @param reason Reason for pause
      */
     function emergencyPause(address user, string calldata reason) external onlyOwner {
         userPolicies[user].active = false;
         emit EmergencyPause(user, reason);
+    }
+
+    /**
+     * @notice Blacklist a user permanently (persists across policy recreation)
+     * @param user User address
+     * @param reason Reason for blacklisting
+     */
+    function blacklistUser(address user, string calldata reason) external onlyOwner {
+        blacklistedUsers[user] = true;
+        userPolicies[user].active = false;
+        emit UserBlacklistedEvent(user, reason);
+    }
+
+    /**
+     * @notice Remove user from blacklist
+     * @param user User address
+     */
+    function unblacklistUser(address user) external onlyOwner {
+        blacklistedUsers[user] = false;
+        emit UserUnblacklisted(user);
     }
 
     // ============ View Functions ============
@@ -241,5 +271,14 @@ contract PolicyGuard {
      */
     function getProtocolRiskScore(address protocol) external view returns (uint256) {
         return protocolRiskScores[protocol];
+    }
+
+    /**
+     * @notice Check if user is blacklisted
+     * @param user User address
+     * @return Whether user is blacklisted
+     */
+    function isUserBlacklisted(address user) external view returns (bool) {
+        return blacklistedUsers[user];
     }
 }

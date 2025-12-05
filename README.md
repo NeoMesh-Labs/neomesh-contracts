@@ -60,11 +60,58 @@ cd neomesh-contracts
 npm install
 
 # Compile contracts
-npx hardhat compile
+npm run compile
 
 # Run tests
-npx hardhat test
+npm test
+
+# Run tests with coverage
+npm run test:coverage
+
+# Lint contracts
+npm run lint
 ```
+
+## Test Coverage
+
+The test suite includes **129 tests** covering:
+
+### Unit Tests (51 tests)
+- **PolicyGuard**: Policy creation, whitelisting, transfer validation, emergency pause
+- **StrategyRouter**: Intent creation, adapter registration, optimal routing
+- **SafeExecutor**: Safe registration, transaction queue, confirmations, execution
+
+### Integration/Flow Tests (9 tests)
+- **User Onboarding**: Complete policy + intent creation flow
+- **Protocol Registration**: Adapter registration and whitelisting
+- **Optimal Route Selection**: Finding best adapter based on APY/risk
+- **Policy Enforcement**: Daily limits, 24h reset, risk blocking
+- **Multi-Sig Execution**: Full Safe transaction lifecycle
+- **Emergency Scenarios**: Pause functionality, risk blocking
+- **Complete Investment Cycle**: End-to-end workflow simulation
+
+### Security & Edge Case Tests (36 tests)
+- **Reentrancy Protection**: Rapid sequential transfers
+- **Access Control**: Owner-only functions, intent ownership, signer verification
+- **Boundary Values**: Min/max limits, exact thresholds, zero values
+- **State Transitions**: Policy lifecycle, transaction states, double-execution prevention
+- **Time-Based Behavior**: 24h limit reset, delay enforcement
+- **Multi-User Scenarios**: Independent policies, isolated intents
+- **Protocol Exposure**: Per-protocol tracking, exposure limit checks
+
+### Attack Vector Tests (29 tests)
+- **Front-Running Attacks**: Intent ID collision, transaction confirmation hijacking
+- **Griefing Attacks**: Policy spam, confirmation spam, cancellation attempts
+- **Privilege Escalation**: User-to-owner, signer-to-router, cross-user intent access
+- **Replay Attacks**: Double execution, double confirmation prevention
+- **Daily Limit Bypass**: Small transfers, policy recreation, multi-protocol splitting
+- **Whitelist Bypass**: Non-whitelisted transfers, self-whitelisting attempts
+- **Risk Score Bypass**: High-risk protocol blocking, score manipulation
+- **Threshold Manipulation**: Under-threshold execution, threshold changes
+- **Timing Attacks**: Pre-delay execution, daily reset manipulation
+- **Emergency Pause Bypass**: Post-pause transfers, reactivation attempts
+- **Integer Overflow/Underflow**: Max uint256 handling, large amounts
+- **Zero Address Attacks**: Null address injection in all registration functions
 
 ## Usage
 
@@ -115,6 +162,13 @@ safeExecutor.registerSafe(
 - Policy constraints are enforced on-chain
 - Multi-sig support via Gnosis Safe integration
 - Circuit breakers and emergency pause functionality
+
+## Security Features
+
+✅ **Two-Tier User Blocking:**
+- `emergencyPause(user)` - Soft pause, user can reactivate by creating new policy (for temporary issues)
+- `blacklistUser(user)` - Hard block, persists across policy recreation (for malicious actors)
+- `unblacklistUser(user)` - Owner can remove from blacklist when resolved
 
 ## Audits
 

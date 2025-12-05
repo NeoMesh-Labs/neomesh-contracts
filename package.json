@@ -1,0 +1,18 @@
+{
+  "name": "neomesh-contracts",
+  "version": "1.0.0",
+  "description": "Intent-based Money OS for Web3 - Core Smart Contracts",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "test:coverage": "hardhat coverage",
+    "lint": "solhint 'contracts/**/*.sol'",
+    "clean": "hardhat clean"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "hardhat": "^2.19.0",
+    "solhint": "^4.0.0"
+  },
+  "license": "MIT"
+}
