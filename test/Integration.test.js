@@ -163,7 +163,7 @@ describe("Integration Tests - Full Flow", function () {
 
       // Aave (8%, risk 3) should win for 5% target with max risk 5
       let [bestAdapter, expectedAPY] = await strategyRouter.getOptimalRoute(
-        ethers.parseEther("10"),
+        ethers.ZeroHash,
         500,
         5
       );
@@ -172,7 +172,7 @@ describe("Integration Tests - Full Flow", function () {
 
       // Lido (4.5%, risk 2) should win for 4% target with max risk 2
       [bestAdapter, expectedAPY] = await strategyRouter.getOptimalRoute(
-        ethers.parseEther("10"),
+        ethers.ZeroHash,
         400,
         2
       );
@@ -425,7 +425,7 @@ describe("Integration Tests - Full Flow", function () {
 
       // 4. Find optimal route
       const [bestAdapter, expectedAPY] = await strategyRouter.getOptimalRoute(
-        ethers.parseEther("100"),
+        ethers.ZeroHash,
         700,
         5
       );

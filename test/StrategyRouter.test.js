@@ -6,7 +6,7 @@ const {
 
 describe("StrategyRouter", function () {
   async function deployStrategyRouterFixture() {
-    const [owner, user1, user2] = await ethers.getSigners();
+    const [owner, user1, user2, attacker] = await ethers.getSigners();
 
     // Deploy PolicyGuard first
     const PolicyGuard = await ethers.getContractFactory("PolicyGuard");
@@ -41,6 +41,7 @@ describe("StrategyRouter", function () {
       owner,
       user1,
       user2,
+      attacker,
     };
   }
 
@@ -165,6 +166,103 @@ describe("StrategyRouter", function () {
     });
   });
 
+  describe("Intent Updates", function () {
+    it("Should update existing intent", async function () {
+      const { strategyRouter, user1 } = await loadFixture(
+        deployStrategyRouterFixture
+      );
+
+      const tx = await strategyRouter
+        .connect(user1)
+        .createIntent(800, 5, ethers.parseEther("1"), ethers.parseEther("0.1"));
+      const receipt = await tx.wait();
+      const event = receipt.logs.find((log) => {
+        try {
+          return (
+            strategyRouter.interface.parseLog(log)?.name === "IntentCreated"
+          );
+        } catch {
+          return false;
+        }
+      });
+      const intentId = strategyRouter.interface.parseLog(event).args.intentId;
+
+      // Update intent
+      await strategyRouter
+        .connect(user1)
+        .updateIntent(
+          intentId,
+          1000,
+          7,
+          ethers.parseEther("2"),
+          ethers.parseEther("0.2")
+        );
+
+      const intent = await strategyRouter.getIntent(intentId);
+      expect(intent.targetAPY).to.equal(1000);
+      expect(intent.maxRisk).to.equal(7);
+    });
+
+    it("Should not allow non-owner to update intent", async function () {
+      const { strategyRouter, user1, attacker } = await loadFixture(
+        deployStrategyRouterFixture
+      );
+
+      const tx = await strategyRouter
+        .connect(user1)
+        .createIntent(800, 5, ethers.parseEther("1"), ethers.parseEther("0.1"));
+      const receipt = await tx.wait();
+      const event = receipt.logs.find((log) => {
+        try {
+          return (
+            strategyRouter.interface.parseLog(log)?.name === "IntentCreated"
+          );
+        } catch {
+          return false;
+        }
+      });
+      const intentId = strategyRouter.interface.parseLog(event).args.intentId;
+
+      await expect(
+        strategyRouter
+          .connect(attacker)
+          .updateIntent(
+            intentId,
+            1000,
+            7,
+            ethers.parseEther("2"),
+            ethers.parseEther("0.2")
+          )
+      ).to.be.revertedWithCustomError(strategyRouter, "NotIntentOwner");
+    });
+
+    it("Should deactivate intent", async function () {
+      const { strategyRouter, user1 } = await loadFixture(
+        deployStrategyRouterFixture
+      );
+
+      const tx = await strategyRouter
+        .connect(user1)
+        .createIntent(800, 5, ethers.parseEther("1"), ethers.parseEther("0.1"));
+      const receipt = await tx.wait();
+      const event = receipt.logs.find((log) => {
+        try {
+          return (
+            strategyRouter.interface.parseLog(log)?.name === "IntentCreated"
+          );
+        } catch {
+          return false;
+        }
+      });
+      const intentId = strategyRouter.interface.parseLog(event).args.intentId;
+
+      await strategyRouter.connect(user1).deactivateIntent(intentId);
+
+      const intent = await strategyRouter.getIntent(intentId);
+      expect(intent.active).to.equal(false);
+    });
+  });
+
   describe("Adapter Registration", function () {
     it("Should register an adapter", async function () {
       const { strategyRouter, adapter1, owner } = await loadFixture(
@@ -225,6 +323,46 @@ describe("StrategyRouter", function () {
     });
   });
 
+  describe("Adapter Removal Safety", function () {
+    it("Should not allow removing adapter with TVL > 0", async function () {
+      const { strategyRouter, adapter1, owner } = await loadFixture(
+        deployStrategyRouterFixture
+      );
+
+      await strategyRouter
+        .connect(owner)
+        .registerAdapter(await adapter1.getAddress(), "Aave");
+
+      // Set mock TVL > 0
+      await adapter1.setMockTVL(ethers.parseEther("100"));
+
+      await expect(
+        strategyRouter.connect(owner).removeAdapter(await adapter1.getAddress())
+      ).to.be.revertedWithCustomError(strategyRouter, "AdapterHasFunds");
+    });
+
+    it("Should allow removing adapter with TVL = 0", async function () {
+      const { strategyRouter, adapter1, owner } = await loadFixture(
+        deployStrategyRouterFixture
+      );
+
+      await strategyRouter
+        .connect(owner)
+        .registerAdapter(await adapter1.getAddress(), "Aave");
+
+      // Set TVL to 0
+      await adapter1.setMockTVL(0);
+
+      await expect(
+        strategyRouter.connect(owner).removeAdapter(await adapter1.getAddress())
+      ).to.emit(strategyRouter, "AdapterRemoved");
+
+      expect(
+        await strategyRouter.isAdapterRegistered(await adapter1.getAddress())
+      ).to.equal(false);
+    });
+  });
+
   describe("View Functions", function () {
     it("Should return all adapters", async function () {
       const { strategyRouter, adapter1, adapter2, owner } = await loadFixture(
@@ -278,11 +416,10 @@ describe("StrategyRouter", function () {
 
       // adapter1: 8% APY, risk 3
       // adapter2: 6% APY, risk 5
-      // With maxRisk 5 and targetAPY 500 (5%), adapter1 should win (higher APY, lower risk)
       const [bestAdapter, expectedAPY] = await strategyRouter.getOptimalRoute(
-        ethers.parseEther("10"),
-        500, // 5% target
-        5 // max risk 5
+        ethers.ZeroHash,
+        500,
+        5
       );
 
       expect(bestAdapter).to.equal(await adapter1.getAddress());
@@ -301,10 +438,9 @@ describe("StrategyRouter", function () {
         .connect(owner)
         .registerAdapter(await adapter2.getAddress(), "Compound");
 
-      // Request 20% APY - no adapter can provide this
       const [bestAdapter, expectedAPY] = await strategyRouter.getOptimalRoute(
-        ethers.parseEther("10"),
-        2000, // 20% target - too high
+        ethers.ZeroHash,
+        2000,
         5
       );
 

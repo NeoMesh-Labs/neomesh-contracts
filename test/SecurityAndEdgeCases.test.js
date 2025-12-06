@@ -604,7 +604,7 @@ describe("Security & Edge Cases", function () {
         );
       });
 
-      it("Should allow policy override (create new policy over existing)", async function () {
+      it("Should allow policy update (not override with createPolicy)", async function () {
         const { policyGuard, user1 } = await loadFixture(
           deployFullSystemFixture
         );
@@ -616,10 +616,10 @@ describe("Security & Edge Cases", function () {
           (await policyGuard.getPolicy(user1.address)).dailyLimit
         ).to.equal(ethers.parseEther("100"));
 
-        // Override with new policy
         await policyGuard
           .connect(user1)
-          .createPolicy(ethers.parseEther("200"), 3000, 7, true);
+          .updatePolicy(ethers.parseEther("200"), 3000, 7, true);
+
         const newPolicy = await policyGuard.getPolicy(user1.address);
         expect(newPolicy.dailyLimit).to.equal(ethers.parseEther("200"));
         expect(newPolicy.maxProtocolExposure).to.equal(3000);
@@ -1057,6 +1057,135 @@ describe("Security & Edge Cases", function () {
       // 25 ETH / 100 ETH = 25% > 20% limit
       expect(allowed).to.equal(false);
       expect(exposureBps).to.equal(2500); // 25%
+    });
+  });
+
+  describe("StrategyRouter Pause Mechanism", function () {
+    it("Should prevent intent creation when paused", async function () {
+      const { strategyRouter, owner, user1 } = await loadFixture(
+        deployFullSystemFixture
+      );
+
+      await strategyRouter.connect(owner).pause("Emergency maintenance");
+
+      await expect(
+        strategyRouter
+          .connect(user1)
+          .createIntent(
+            800,
+            5,
+            ethers.parseEther("1"),
+            ethers.parseEther("0.1")
+          )
+      ).to.be.revertedWithCustomError(strategyRouter, "IsPaused");
+    });
+
+    it("Should prevent route execution when paused", async function () {
+      const { strategyRouter, policyGuard, adapter1, owner, user1 } =
+        await loadFixture(deployFullSystemFixture);
+
+      // Create intent before pause
+      const tx = await strategyRouter
+        .connect(user1)
+        .createIntent(800, 5, ethers.parseEther("1"), ethers.parseEther("0.1"));
+      const receipt = await tx.wait();
+      const event = receipt.logs.find((log) => {
+        try {
+          return (
+            strategyRouter.interface.parseLog(log)?.name === "IntentCreated"
+          );
+        } catch {
+          return false;
+        }
+      });
+      const intentId = strategyRouter.interface.parseLog(event).args.intentId;
+
+      // Pause
+      await strategyRouter.connect(owner).pause("Emergency");
+
+      // Try to execute
+      await expect(
+        strategyRouter.connect(user1).executeRoute(intentId, [])
+      ).to.be.revertedWithCustomError(strategyRouter, "IsPaused");
+    });
+
+    it("Should allow unpause and resume operations", async function () {
+      const { strategyRouter, owner, user1 } = await loadFixture(
+        deployFullSystemFixture
+      );
+
+      await strategyRouter.connect(owner).pause("Test");
+      await strategyRouter.connect(owner).unpause();
+
+      // Should work after unpause
+      await expect(
+        strategyRouter
+          .connect(user1)
+          .createIntent(
+            800,
+            5,
+            ethers.parseEther("1"),
+            ethers.parseEther("0.1")
+          )
+      ).to.emit(strategyRouter, "IntentCreated");
+    });
+  });
+
+  describe("Gas Limit Warnings", function () {
+    it("Should emit warning when gas limit exceeded but not revert", async function () {
+      const { strategyRouter, policyGuard, adapter1, adapter2, owner, user1 } =
+        await loadFixture(deployFullSystemFixture);
+
+      // Setup with very low gas limit
+      await strategyRouter
+        .connect(owner)
+        .registerAdapter(await adapter1.getAddress(), "Aave");
+      await strategyRouter
+        .connect(owner)
+        .registerAdapter(await adapter2.getAddress(), "Compound");
+      await policyGuard
+        .connect(user1)
+        .createPolicy(ethers.parseEther("100"), 5000, 10, false);
+      await policyGuard
+        .connect(owner)
+        .whitelistProtocol(await adapter1.getAddress(), 3);
+      await policyGuard
+        .connect(owner)
+        .whitelistProtocol(await adapter2.getAddress(), 5);
+
+      const tx = await strategyRouter
+        .connect(user1)
+        .createIntent(800, 5, ethers.parseEther("1"), 1); // 1 wei gas limit
+
+      const receipt = await tx.wait();
+      const event = receipt.logs.find((log) => {
+        try {
+          return (
+            strategyRouter.interface.parseLog(log)?.name === "IntentCreated"
+          );
+        } catch {
+          return false;
+        }
+      });
+      const intentId = strategyRouter.interface.parseLog(event).args.intentId;
+
+      // Set user balances
+      await adapter1.setUserBalance(user1.address, ethers.parseEther("10"));
+
+      // Execute route - should emit warning but succeed
+      const routes = [
+        {
+          fromAdapter: await adapter1.getAddress(),
+          toAdapter: await adapter2.getAddress(),
+          amount: ethers.parseEther("1"),
+          minReceived: 0,
+          data: "0x",
+        },
+      ];
+
+      await expect(
+        strategyRouter.connect(user1).executeRoute(intentId, routes)
+      ).to.emit(strategyRouter, "GasLimitExceededWarning");
     });
   });
 });

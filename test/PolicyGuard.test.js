@@ -15,6 +15,36 @@ describe("PolicyGuard", function () {
     return { policyGuard, owner, user1, user2, protocol1, protocol2 };
   }
 
+  async function deployFullSystemFixture() {
+    const [owner, user1, user2, attacker] = await ethers.getSigners();
+
+    const PolicyGuard = await ethers.getContractFactory("PolicyGuard");
+    const policyGuard = await PolicyGuard.deploy();
+
+    const StrategyRouter = await ethers.getContractFactory("StrategyRouter");
+    const strategyRouter = await StrategyRouter.deploy(
+      await policyGuard.getAddress()
+    );
+
+    const MockAdapter = await ethers.getContractFactory("MockAdapter");
+    const adapter1 = await MockAdapter.deploy(
+      await strategyRouter.getAddress(),
+      "Aave",
+      3,
+      800
+    );
+
+    return {
+      policyGuard,
+      strategyRouter,
+      adapter1,
+      owner,
+      user1,
+      user2,
+      attacker,
+    };
+  }
+
   describe("Deployment", function () {
     it("Should set the correct owner", async function () {
       const { policyGuard, owner } = await loadFixture(
@@ -84,6 +114,55 @@ describe("PolicyGuard", function () {
           .connect(user1)
           .createPolicy(ethers.parseEther("100"), 2000, 11, false)
       ).to.be.revertedWithCustomError(policyGuard, "InvalidRiskScore");
+    });
+  });
+
+  describe("Policy Updates", function () {
+    it("Should update existing policy", async function () {
+      const { policyGuard, user1 } = await loadFixture(deployFullSystemFixture);
+
+      await policyGuard
+        .connect(user1)
+        .createPolicy(ethers.parseEther("100"), 5000, 5, false);
+
+      await policyGuard
+        .connect(user1)
+        .updatePolicy(ethers.parseEther("200"), 3000, 7, true);
+
+      const policy = await policyGuard.getPolicy(user1.address);
+      expect(policy.dailyLimit).to.equal(ethers.parseEther("200"));
+      expect(policy.maxProtocolExposure).to.equal(3000);
+      expect(policy.maxRiskScore).to.equal(7);
+      expect(policy.requireWhitelist).to.equal(true);
+    });
+
+    it("Should not reset daily spent when updating policy", async function () {
+      const { policyGuard, adapter1, owner, user1 } = await loadFixture(
+        deployFullSystemFixture
+      );
+
+      await policyGuard
+        .connect(user1)
+        .createPolicy(ethers.parseEther("100"), 5000, 10, false);
+      await policyGuard
+        .connect(owner)
+        .whitelistProtocol(await adapter1.getAddress(), 3);
+
+      // Spend 50
+      await policyGuard.validateTransfer(
+        user1.address,
+        await adapter1.getAddress(),
+        ethers.parseEther("50")
+      );
+
+      // Update policy
+      await policyGuard
+        .connect(user1)
+        .updatePolicy(ethers.parseEther("200"), 5000, 10, false);
+
+      // Daily spent should still be 50, not reset
+      const remaining = await policyGuard.getRemainingDailyLimit(user1.address);
+      expect(remaining).to.equal(ethers.parseEther("150")); // 200 - 50
     });
   });
 
@@ -286,6 +365,99 @@ describe("PolicyGuard", function () {
 
       const remaining = await policyGuard.getRemainingDailyLimit(user1.address);
       expect(remaining).to.equal(ethers.parseEther("60"));
+    });
+  });
+
+  describe("Protocol Exposure Decrease", function () {
+    it("Should decrease exposure when user withdraws", async function () {
+      const { policyGuard, strategyRouter, adapter1, owner, user1 } =
+        await loadFixture(deployFullSystemFixture);
+
+      // Setup
+      await policyGuard
+        .connect(user1)
+        .createPolicy(ethers.parseEther("100"), 5000, 10, false);
+      await policyGuard
+        .connect(owner)
+        .whitelistProtocol(await adapter1.getAddress(), 3);
+      await policyGuard
+        .connect(owner)
+        .authorizeCaller(await strategyRouter.getAddress());
+
+      // Deposit creates exposure
+      await policyGuard.validateTransfer(
+        user1.address,
+        await adapter1.getAddress(),
+        ethers.parseEther("50")
+      );
+      expect(
+        await policyGuard.getProtocolExposure(
+          user1.address,
+          await adapter1.getAddress()
+        )
+      ).to.equal(ethers.parseEther("50"));
+
+      // Withdraw should decrease exposure
+      await policyGuard.decreaseExposure(
+        user1.address,
+        await adapter1.getAddress(),
+        ethers.parseEther("30")
+      );
+      expect(
+        await policyGuard.getProtocolExposure(
+          user1.address,
+          await adapter1.getAddress()
+        )
+      ).to.equal(ethers.parseEther("20"));
+    });
+
+    it("Should not allow unauthorized caller to decrease exposure", async function () {
+      const { policyGuard, adapter1, user1, attacker } = await loadFixture(
+        deployFullSystemFixture
+      );
+
+      await expect(
+        policyGuard
+          .connect(attacker)
+          .decreaseExposure(user1.address, await adapter1.getAddress(), 100)
+      ).to.be.revertedWithCustomError(policyGuard, "NotAuthorized");
+    });
+
+    it("Should handle exposure decrease exceeding current exposure", async function () {
+      const { policyGuard, strategyRouter, adapter1, owner, user1 } =
+        await loadFixture(deployFullSystemFixture);
+
+      await policyGuard
+        .connect(owner)
+        .authorizeCaller(await strategyRouter.getAddress());
+
+      // Set exposure to 50
+      await policyGuard
+        .connect(user1)
+        .createPolicy(ethers.parseEther("100"), 5000, 10, false);
+      await policyGuard
+        .connect(owner)
+        .whitelistProtocol(await adapter1.getAddress(), 3);
+      await policyGuard.validateTransfer(
+        user1.address,
+        await adapter1.getAddress(),
+        ethers.parseEther("50")
+      );
+
+      // Try to decrease by 100 (more than current 50)
+      await policyGuard.decreaseExposure(
+        user1.address,
+        await adapter1.getAddress(),
+        ethers.parseEther("100")
+      );
+
+      // Should be set to 0, not underflow
+      expect(
+        await policyGuard.getProtocolExposure(
+          user1.address,
+          await adapter1.getAddress()
+        )
+      ).to.equal(0);
     });
   });
 });

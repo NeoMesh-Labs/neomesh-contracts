@@ -482,22 +482,20 @@ describe("Attack Vectors & Bypass Attempts", function () {
         .connect(owner)
         .whitelistProtocol(await adapter1.getAddress(), 3);
 
-      // Use up daily limit
       await policyGuard.validateTransfer(
         user1.address,
         await adapter1.getAddress(),
         ethers.parseEther("100")
       );
 
-      // Try to bypass by recreating policy
-      await policyGuard
-        .connect(user1)
-        .createPolicy(ethers.parseEther("100"), 5000, 10, false);
+      await expect(
+        policyGuard
+          .connect(user1)
+          .createPolicy(ethers.parseEther("100"), 5000, 10, false)
+      ).to.be.revertedWithCustomError(policyGuard, "PolicyAlreadyExists");
 
-      // Daily spent should be reset (new policy), but this is expected behavior
-      // The key is that the user cannot exceed their own policy limits
       const remaining = await policyGuard.getRemainingDailyLimit(user1.address);
-      expect(remaining).to.equal(ethers.parseEther("100")); // New policy = fresh limit
+      expect(remaining).to.equal(ethers.parseEther("0"));
     });
 
     it("Should not allow bypassing daily limit via different protocols", async function () {
